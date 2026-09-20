@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "cd clearway-ai && npx -y pnpm install",
+  "buildCommand": "cd clearway-ai && npx -y pnpm install && npx -y pnpm run build && node -e \"const fs=require('fs'); if(fs.existsSync('dist/public')){fs.cpSync('dist/public', '../dist', {recursive:true});}\"",
+  "outputDirectory": "dist",
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
