@@ -1,0 +1,13 @@
+{
+  "name": "clearway-ai-runner",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ClearWay AI root runner for easy startup",
+  "scripts": {
+    "dev": "npm --prefix clearway-ai run dev",
+    "start": "npm --prefix clearway-ai start",
+    "build": "npm --prefix clearway-ai run build",
+    "test": "npm --prefix clearway-ai test",
+    "check": "npm --prefix clearway-ai run check"
+  }
+}
