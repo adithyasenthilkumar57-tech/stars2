@@ -5,8 +5,8 @@
   "description": "ClearWay AI root workspace runner and Vercel deployment config",
   "scripts": {
     "dev": "npm --prefix clearway-ai run dev",
-    "postinstall": "cd clearway-ai && npx -y pnpm install",
-    "build": "cd clearway-ai && npx -y pnpm install && npx -y pnpm run build && node -e \"const fs=require('fs'); if(fs.existsSync('clearway-ai/dist/public')){fs.cpSync('clearway-ai/dist/public', 'dist', {recursive:true});}\"",
+    "postinstall": "cd clearway-ai && npx -y pnpm install --no-frozen-lockfile",
+    "build": "cd clearway-ai && npx -y pnpm install --no-frozen-lockfile && npx -y pnpm run build && node -e \"const fs=require('fs'); if(fs.existsSync('dist/public')){fs.cpSync('dist/public', '../dist', {recursive:true});}\"",
     "start": "npm --prefix clearway-ai start",
     "test": "npm --prefix clearway-ai test",
     "check": "npm --prefix clearway-ai run check"
