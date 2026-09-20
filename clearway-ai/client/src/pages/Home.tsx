@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import * as simulation from "@shared/trafficState";
+import { CameraVisionModal } from "@/components/CameraVisionModal";
 import {
   Activity,
   AlertTriangle,
@@ -10,21 +11,27 @@ import {
   Bell,
   Bot,
   BrainCircuit,
+  Camera,
+  Car,
   Check,
   ChevronRight,
   CircleDot,
   CloudRain,
   Cpu,
+  Crosshair,
   Download,
+  Eye,
   Gauge,
   GitBranch,
   Headphones,
   Hospital,
+  Layers,
   Leaf,
   Lightbulb,
   Map,
   Menu,
   MessageSquare,
+  Navigation,
   Network,
   Play,
   Radio,
@@ -33,12 +40,14 @@ import {
   Send,
   ShieldAlert,
   Siren,
+  Sliders,
   Sparkles,
   Timer,
   TrafficCone,
   TrendingDown,
   TrendingUp,
   Truck,
+  Video,
   X,
   Zap,
 } from "lucide-react";
@@ -74,14 +83,83 @@ const navItems: Array<{ id: PageKey; label: string; icon: typeof Activity }> = [
 ];
 
 const stageLabels = ["Heavy traffic", "AI predict", "Quick optimize", "Emergency", "Approve", "Siren", "Simulation", "Hospital", "Re-optimize"];
-const networkPositions: Record<string, { x: number; y: number }> = {
-  J1: { x: 90, y: 108 },
-  J2: { x: 235, y: 108 },
-  J3: { x: 380, y: 108 },
-  J4: { x: 525, y: 108 },
-  J5: { x: 235, y: 190 },
-  J6: { x: 380, y: 190 },
+
+interface MapNode {
+  x: number;
+  y: number;
+  name: string;
+  zone: string;
+  desc: string;
+  isCore: boolean;
+}
+
+const networkPositions: Record<string, MapNode> = {
+  J1: { x: 140, y: 175, name: "North Gate", zone: "West Highway", desc: "Arterial expressway entry & freight interchange", isCore: true },
+  J2: { x: 340, y: 175, name: "Market Street", zone: "Commercial Center", desc: "Commercial core & acoustic siren sensor hub", isCore: true },
+  J3: { x: 540, y: 175, name: "Central Exchange", zone: "Downtown Core", desc: "Metropolitan bottleneck & primary optimization node", isCore: true },
+  J4: { x: 730, y: 175, name: "Riverside", zone: "Tech Parkway", desc: "Waterfront corridor & hospital approach artery", isCore: true },
+  J5: { x: 340, y: 315, name: "Civic Loop", zone: "Civic District", desc: "South municipal ring & government center feeder", isCore: true },
+  J6: { x: 540, y: 315, name: "East Terminal", zone: "Intermodal Hub", desc: "Subway/Bus transit intermodal & rail freight exchange", isCore: true },
+  HOSPITAL: { x: 880, y: 175, name: "City Hospital", zone: "Medical District", desc: "Level 1 Trauma Center with priority emergency bay", isCore: false },
+  N1: { x: 340, y: 55, name: "Tech District", zone: "Silicon North", desc: "Autonomous vehicle R&D and high-tech corporate campus", isCore: false },
+  N2: { x: 540, y: 55, name: "University Logistics", zone: "Academic Hub", desc: "Research park & university logistics corridor", isCore: false },
+  N3: { x: 730, y: 55, name: "Airport Expressway", zone: "Aero Corridor", desc: "International terminal highway & skyway connection", isCore: false },
+  W1: { x: 140, y: 315, name: "West Freight Depot", zone: "Cargo Port", desc: "Intermodal container logistics & heavy freight terminal", isCore: false },
+  H1: { x: 540, y: 420, name: "Harbor Bay & Port", zone: "Maritime District", desc: "Deepwater commercial port & harbor promenade arterial", isCore: false },
+  S2: { x: 730, y: 315, name: "Financial Island", zone: "Financial Sector", desc: "Banking district & high-capacity coastal bridge link", isCore: false },
+  E1: { x: 880, y: 315, name: "Coastal Parkway", zone: "East Coastline", desc: "Perimeter waterfront highway connecting to trauma center", isCore: false },
 };
+
+interface RoadSegment {
+  id: string;
+  name: string;
+  from: string;
+  to: string;
+  path: string;
+  lanes: number;
+  type: "arterial" | "ring" | "avenue" | "flyover" | "feeder";
+  isCorridor?: boolean;
+}
+
+const roadSegments: RoadSegment[] = [
+  // 1. Central Arterial Expressway (Main Emergency Spine)
+  { id: "R_C1", name: "A-1 Grand Expressway (West)", from: "J1", to: "J2", path: "M 140 175 L 340 175", lanes: 4, type: "arterial", isCorridor: true },
+  { id: "R_C2", name: "A-1 Grand Expressway (Central)", from: "J2", to: "J3", path: "M 340 175 L 540 175", lanes: 6, type: "arterial", isCorridor: true },
+  { id: "R_C3", name: "A-1 Grand Expressway (East)", from: "J3", to: "J4", path: "M 540 175 L 730 175", lanes: 6, type: "arterial", isCorridor: true },
+  { id: "R_C4", name: "A-1 Hospital Trauma Access", from: "J4", to: "HOSPITAL", path: "M 730 175 L 880 175", lanes: 4, type: "arterial", isCorridor: true },
+
+  // 2. Northern Perimeter & Airport Highway Ring
+  { id: "R_N1", name: "Ring-10 West Tech Ramp", from: "J1", to: "N1", path: "M 140 175 L 140 55 L 340 55", lanes: 4, type: "ring" },
+  { id: "R_N2", name: "Silicon Boulevard", from: "N1", to: "N2", path: "M 340 55 L 540 55", lanes: 4, type: "ring" },
+  { id: "R_N3", name: "Airport Express Ringway", from: "N2", to: "N3", path: "M 540 55 L 730 55", lanes: 6, type: "ring" },
+  { id: "R_N4", name: "Perimeter Heliport Connector", from: "N3", to: "HOSPITAL", path: "M 730 55 L 880 55 L 880 175", lanes: 4, type: "ring" },
+
+  // 3. Southern Beltway & Waterfront Corridor
+  { id: "R_S1", name: "Port Freight Parkway", from: "W1", to: "J5", path: "M 140 315 L 340 315", lanes: 4, type: "arterial" },
+  { id: "R_S2", name: "Civic Southern Beltway", from: "J5", to: "J6", path: "M 340 315 L 540 315", lanes: 4, type: "arterial" },
+  { id: "R_S3", name: "Commerce Concourse", from: "J6", to: "S2", path: "M 540 315 L 730 315", lanes: 4, type: "arterial" },
+  { id: "R_S4", name: "Financial Coastal Causeway", from: "S2", to: "E1", path: "M 730 315 L 880 315", lanes: 4, type: "arterial" },
+  { id: "R_S5", name: "East Trauma Access Ramp", from: "E1", to: "HOSPITAL", path: "M 880 315 L 880 175", lanes: 2, type: "feeder" },
+  { id: "R_H1", name: "Harbor Bay Access Road", from: "J5", to: "H1", path: "M 340 315 L 340 420 L 540 420", lanes: 4, type: "feeder" },
+  { id: "R_H2", name: "Harbor Terminal Arterial", from: "H1", to: "J6", path: "M 540 420 L 540 315", lanes: 4, type: "feeder" },
+
+  // 4. North-South Cross Metropolitan Avenues
+  { id: "R_A1", name: "1st Tech Avenue", from: "N1", to: "J2", path: "M 340 55 L 340 175", lanes: 4, type: "avenue" },
+  { id: "R_A2", name: "Market-Civic Transit Spine", from: "J2", to: "J5", path: "M 340 175 L 340 315", lanes: 4, type: "avenue" },
+  { id: "R_A3", name: "University North Avenue", from: "N2", to: "J3", path: "M 540 55 L 540 175", lanes: 4, type: "avenue" },
+  { id: "R_A4", name: "Exchange-Terminal Corridor", from: "J3", to: "J6", path: "M 540 175 L 540 315", lanes: 4, type: "avenue" },
+  { id: "R_A5", name: "Airport South Concourse", from: "N3", to: "J4", path: "M 730 55 L 730 175", lanes: 4, type: "avenue" },
+  { id: "R_A6", name: "Riverside Financial Avenue", from: "J4", to: "S2", path: "M 730 175 L 730 315", lanes: 4, type: "avenue" },
+  { id: "R_A7", name: "West Gate Cargo Feeder", from: "J1", to: "W1", path: "M 140 175 L 140 315", lanes: 4, type: "avenue" },
+
+  // 5. Diagonal Elevated Express Flyovers & Overpasses (Bridge Layer)
+  { id: "R_F1", name: "Skyline Express Flyover (Elevated)", from: "J1", to: "J6", path: "M 140 175 Q 340 255 540 315", lanes: 2, type: "flyover" },
+  { id: "R_F2", name: "Baylink Diagonal Overpass", from: "J5", to: "J4", path: "M 340 315 Q 535 245 730 175", lanes: 2, type: "flyover" },
+  { id: "R_F3", name: "Tech-Center Diagonal Ramp", from: "N1", to: "J3", path: "M 340 55 Q 440 115 540 175", lanes: 2, type: "flyover" },
+  { id: "R_F4", name: "Direct Hospital Medical Overpass", from: "J2", to: "HOSPITAL", path: "M 340 175 Q 610 100 880 175", lanes: 2, type: "flyover" },
+  { id: "R_F5", name: "Harbor Coastal Flyover", from: "H1", to: "S2", path: "M 540 420 Q 635 365 730 315", lanes: 2, type: "flyover" },
+  { id: "R_F6", name: "Freight Express Bridge", from: "W1", to: "J2", path: "M 140 315 Q 240 245 340 175", lanes: 2, type: "flyover" },
+];
 
 function statusColor(status: string) {
   if (status === "critical") return "#fb7185";
@@ -112,35 +190,545 @@ function StatusDot({ status }: { status: string }) {
   return <span className={cx("status-dot", status === "critical" && "pulse-red", status === "green_priority" && "pulse-lime")} style={{ background: statusColor(status) }} />;
 }
 
-function NetworkMap({ state, compact = false }: { state: any; compact?: boolean }) {
+function NetworkMap({
+  state,
+  actions,
+  setPage,
+  onOpenJunctionCamera,
+  compact = false,
+}: {
+  state: any;
+  actions?: any;
+  setPage?: (page: PageKey) => void;
+  onOpenJunctionCamera?: (junctionId: string) => void;
+  compact?: boolean;
+}) {
+  const [selectedNode, setSelectedNode] = useState<string>("J3");
+  const [hoveredRoad, setHoveredRoad] = useState<RoadSegment | null>(null);
+  const [mapFilter, setMapFilter] = useState<"all" | "congestion" | "emergency" | "flyovers">("all");
+  const [trafficParticles, setTrafficParticles] = useState<boolean>(true);
+
   const route = state?.emergencyRoute ?? [];
   const currentStop = state?.emergency?.currentStop ?? -1;
+  const isEmergencyActive = !!state?.emergencyActive;
+
+  // Find junction info for selected node
+  const activeJunction = state?.junctions?.find((j: any) => j.id === selectedNode);
+  const activeNodeInfo = networkPositions[selectedNode];
+
+  // Helper to determine dynamic road stroke color
+  const getRoadColor = (road: RoadSegment) => {
+    if (isEmergencyActive && road.isCorridor) return "#a3e635";
+    if (mapFilter === "emergency") return road.isCorridor ? "#a3e635" : "#1e293b";
+    if (mapFilter === "flyovers" && road.type !== "flyover") return "#1e293b";
+
+    const fromJ = state?.junctions?.find((j: any) => j.id === road.from);
+    const toJ = state?.junctions?.find((j: any) => j.id === road.to);
+    const worst = fromJ?.status === "critical" || toJ?.status === "critical" ? "critical" : fromJ?.status === "watch" || toJ?.status === "watch" ? "watch" : "normal";
+
+    if (mapFilter === "congestion") {
+      return statusColor(worst);
+    }
+
+    if (worst === "critical") return "#fb7185";
+    if (worst === "watch") return "#fbbf24";
+    if (road.type === "flyover") return "#a78bfa";
+    return "#38bdf8";
+  };
+
+  const filteredRoads = roadSegments.filter((road) => {
+    if (mapFilter === "emergency") return road.isCorridor || isEmergencyActive;
+    if (mapFilter === "flyovers") return road.type === "flyover";
+    return true;
+  });
+
   return (
     <div className={cx("network-map", compact && "network-map-compact")}>
-      <div className="map-header"><div><span className="eyebrow">NETWORK TOPOLOGY</span><h3>Six-junction traffic mesh</h3></div><Badge tone="slate">SIMULATED MAP</Badge></div>
+      {/* Map Header with Filters & Scenario Toolbar */}
+      <div className="map-header">
+        <div>
+          <span className="eyebrow">METROPOLITAN NETWORK TOPOLOGY · 28 INTERCONNECTED ROADS</span>
+          <h3>Urban Traffic Grid & Autonomous Mesh</h3>
+        </div>
+        <div className="map-top-tools">
+          <div className="map-filter-pills">
+            <button className={cx("map-filter-btn", mapFilter === "all" && "active")} onClick={() => setMapFilter("all")}>
+              All Roads (28)
+            </button>
+            <button className={cx("map-filter-btn", mapFilter === "congestion" && "active")} onClick={() => setMapFilter("congestion")}>
+              Congestion Heatmap
+            </button>
+            <button className={cx("map-filter-btn", mapFilter === "emergency" && "active")} onClick={() => setMapFilter("emergency")}>
+              Emergency Corridor
+            </button>
+            <button className={cx("map-filter-btn", mapFilter === "flyovers" && "active")} onClick={() => setMapFilter("flyovers")}>
+              Express Flyovers
+            </button>
+          </div>
+
+          <button
+            className={cx("map-toggle-btn", trafficParticles && "active")}
+            onClick={() => setTrafficParticles(!trafficParticles)}
+            title="Toggle Live Animated Vehicle Traffic Particles"
+          >
+            <Car size={13} />
+            <span>Vehicles: {trafficParticles ? "ON" : "OFF"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Action Scenario Bar directly above SVG Canvas */}
+      {actions && (
+        <div className="map-quick-toolbar">
+          <span className="quick-label"><Sparkles size={13} /> Quick Network Actions:</span>
+          <button className="map-action-pill lime" onClick={() => actions.optimize?.mutate?.()} title="Run Hybrid Quantum-Classical Signal Optimization">
+            <Zap size={12} /> Quantum Optimize
+          </button>
+          <button className="map-action-pill amber" onClick={() => actions.heavy?.mutate?.()} title="Simulate Rush Hour Congestion Spike">
+            <AlertTriangle size={12} /> Rush Hour Jam
+          </button>
+          <button className="map-action-pill red" onClick={() => actions.activate?.mutate?.()} title="Dispatch Emergency Ambulance to Hospital">
+            <Ambulance size={12} /> Emergency Wave
+          </button>
+          <button className="map-action-pill cyan" onClick={() => actions.siren?.mutate?.()} title="Simulate Siren Acoustic Wave Detection at J2">
+            <Siren size={12} /> Siren Sensor
+          </button>
+          <button className="map-action-pill slate" onClick={() => actions.reset?.mutate?.()} title="Reset Entire Grid to Normal">
+            <RotateCcw size={12} /> Reset Grid
+          </button>
+        </div>
+      )}
+
+      {/* Main SVG Urban Grid Map Canvas */}
       <div className="map-canvas">
-        <svg viewBox="0 0 640 250" role="img" aria-label="Simulated traffic network map">
-          <defs><linearGradient id="road" x1="0" x2="1"><stop stopColor="#334155" /><stop offset="1" stopColor="#1e293b" /></linearGradient><filter id="glow"><feGaussianBlur stdDeviation="3" result="coloredBlur" /><feMerge><feMergeNode in="coloredBlur" /><feMergeNode in="SourceGraphic" /></feMerge></filter></defs>
-          <path d="M90 108 H525 M235 108 V190 M380 108 V190" stroke="url(#road)" strokeWidth="14" strokeLinecap="round" />
-          <path d="M90 108 H525 M235 108 V190 M380 108 V190" stroke="#64748b" strokeWidth="1.5" strokeDasharray="7 8" opacity=".7" />
-          {route.length > 1 && <path d="M90 108 H525" stroke="#a3e635" strokeWidth="5" strokeLinecap="round" opacity=".8" filter="url(#glow)" />}
+        <svg viewBox="0 0 940 460" role="img" aria-label="Metropolitan multi-road traffic network map">
+          <defs>
+            <linearGradient id="roadBed" x1="0" x2="1">
+              <stop offset="0%" stopColor="#0f1a29" />
+              <stop offset="100%" stopColor="#152438" />
+            </linearGradient>
+            <linearGradient id="laserGreen" x1="0" x2="1">
+              <stop offset="0%" stopColor="#a3e635" />
+              <stop offset="100%" stopColor="#4ade80" />
+            </linearGradient>
+            <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+              <feMerge>
+                <feMergeNode in="coloredBlur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+            <filter id="flyoverShadow" x="-10%" y="-10%" width="130%" height="130%">
+              <feDropShadow dx="2" dy="8" stdDeviation="5" floodColor="#000000" floodOpacity="0.7" />
+            </filter>
+          </defs>
+
+          {/* Background Grid Pattern */}
+          <g opacity="0.08">
+            {Array.from({ length: 18 }).map((_, i) => (
+              <line key={`vg-${i}`} x1={i * 55} y1="0" x2={i * 55} y2="460" stroke="#38bdf8" strokeWidth="1" />
+            ))}
+            {Array.from({ length: 9 }).map((_, i) => (
+              <line key={`hg-${i}`} x1="0" y1={i * 55} x2="940" y2={i * 55} stroke="#38bdf8" strokeWidth="1" />
+            ))}
+          </g>
+
+          {/* Layer 1: Road Asphalt Bed Underlay */}
+          {filteredRoads.map((road) => (
+            <path
+              key={`bed-${road.id}`}
+              d={road.path}
+              stroke="url(#roadBed)"
+              strokeWidth={road.lanes >= 6 ? 24 : road.lanes >= 4 ? 18 : 13}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+              filter={road.type === "flyover" ? "url(#flyoverShadow)" : undefined}
+            />
+          ))}
+
+          {/* Layer 2: Road Surface Rails & Borders */}
+          {filteredRoads.map((road) => (
+            <path
+              key={`rail-${road.id}`}
+              d={road.path}
+              stroke="rgba(71, 85, 105, 0.45)"
+              strokeWidth={road.lanes >= 6 ? 22 : road.lanes >= 4 ? 16 : 11}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          ))}
+
+          {/* Layer 3: Dynamic Congestion Centerlines & Lane Markings */}
+          {filteredRoads.map((road) => {
+            const isHovered = hoveredRoad?.id === road.id;
+            const isCorridorActive = isEmergencyActive && road.isCorridor;
+            const color = getRoadColor(road);
+
+            return (
+              <path
+                key={`line-${road.id}`}
+                d={road.path}
+                stroke={color}
+                strokeWidth={isCorridorActive ? 5 : isHovered ? 3.5 : road.type === "flyover" ? 2.5 : 1.8}
+                strokeDasharray={isCorridorActive ? "none" : road.type === "flyover" ? "8 6" : "6 7"}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                fill="none"
+                opacity={isCorridorActive ? 0.95 : isHovered ? 1 : 0.75}
+                filter={isCorridorActive ? "url(#neonGlow)" : undefined}
+                style={{ cursor: "pointer" }}
+                onMouseEnter={() => setHoveredRoad(road)}
+                onMouseLeave={() => setHoveredRoad(null)}
+              />
+            );
+          })}
+
+          {/* Layer 4: Emergency Corridor Active Green Laser Beam */}
+          {isEmergencyActive && (
+            <path
+              d="M 140 175 L 340 175 L 540 175 L 730 175 L 880 175"
+              stroke="#a3e635"
+              strokeWidth="6"
+              strokeLinecap="round"
+              fill="none"
+              filter="url(#neonGlow)"
+              opacity="0.9"
+            />
+          )}
+
+          {/* Layer 5: Animated Live Vehicle Traffic Particles */}
+          {trafficParticles &&
+            filteredRoads.map((road, idx) => {
+              const dur = `${3.2 + (idx % 5) * 0.7}s`;
+              const delay = `${(idx * 0.35) % 2.5}s`;
+              const isCongested = (road.from === "J3" || road.to === "J3") && state?.networkCongestion > 60;
+              const particleColor = isEmergencyActive && road.isCorridor ? "#a3e635" : isCongested ? "#fb7185" : "#38bdf8";
+
+              return (
+                <circle key={`particle-${road.id}`} r="2.8" fill={particleColor} opacity="0.95">
+                  <animateMotion
+                    path={road.path}
+                    dur={isCongested ? "7.5s" : dur}
+                    begin={delay}
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              );
+            })}
+
+          {/* Layer 6: Emergency Ambulance Vehicle traversing active corridor */}
+          {isEmergencyActive && (
+            <g>
+              <circle r="7" fill="#f43f5e" className="pulse-red">
+                <animateMotion
+                  path="M 140 175 L 340 175 L 540 175 L 730 175 L 880 175"
+                  dur="7s"
+                  repeatCount="indefinite"
+                />
+              </circle>
+            </g>
+          )}
+
+          {/* Layer 7: Siren Acoustic Wave Rings radiating at J2 */}
+          {state?.sirenDetected && (
+            <g transform="translate(340, 175)">
+              <circle r="28" fill="none" stroke="#f43f5e" strokeWidth="2.2" opacity="0.8" className="siren-pulse-ring-1" />
+              <circle r="46" fill="none" stroke="#f43f5e" strokeWidth="1.6" opacity="0.5" className="siren-pulse-ring-2" />
+              <circle r="68" fill="none" stroke="#f43f5e" strokeWidth="1.1" opacity="0.3" className="siren-pulse-ring-3" />
+            </g>
+          )}
+
+          {/* Layer 8: Simulated Accident Hazard Warning Beacon at J4 */}
+          {state?.junctions?.find((j: any) => j.id === "J4")?.incidentStatus !== "clear" && (
+            <g transform="translate(730, 136)">
+              <polygon points="0,-14 14,10 -14,10" fill="#ef4444" stroke="#fef08a" strokeWidth="2.5" className="map-pulse" />
+              <text textAnchor="middle" y="6" fill="#ffffff" fontSize="12" fontWeight="bold">!</text>
+            </g>
+          )}
+
+          {/* Layer 9: Interconnected Metropolitan Nodes & Junctions */}
           {Object.entries(networkPositions).map(([id, pos]) => {
             const junction = state?.junctions?.find((item: any) => item.id === id);
             const onRoute = route.includes(id);
-            const active = route[currentStop] === id;
-            return <g key={id} transform={`translate(${pos.x},${pos.y})`}>
-              <circle r="22" fill="#0f172a" stroke={onRoute ? "#a3e635" : statusColor(junction?.status ?? "normal")} strokeWidth={onRoute ? 3 : 2} opacity=".98" />
-              <circle r="7" fill={active ? "#fbbf24" : statusColor(junction?.status ?? "normal")} className={cx(active && "map-pulse")} />
-              <text textAnchor="middle" y="42" fill="#dbeafe" fontSize="12" fontWeight="700">{id}</text>
-              <text textAnchor="middle" y="56" fill="#64748b" fontSize="8">{junction?.vehicleCount ?? 0} veh · {junction?.signalState ?? "—"}</text>
-              <text textAnchor="middle" y="68" fill="#64748b" fontSize="8">{junction?.queueLength ?? 0} q · {junction?.averageSpeed ?? 0} km/h</text>
-            </g>;
+            const isCurrentStop = route[currentStop] === id;
+            const isSelected = selectedNode === id;
+            const status = junction?.status ?? (id === "HOSPITAL" ? "watch" : "normal");
+            const color = onRoute ? "#a3e635" : statusColor(status);
+
+            return (
+              <g
+                key={id}
+                transform={`translate(${pos.x},${pos.y})`}
+                onClick={() => setSelectedNode(id)}
+                style={{ cursor: "pointer" }}
+                className="map-node-group"
+              >
+                {/* Selection Halo */}
+                {isSelected && (
+                  <circle r="30" fill="none" stroke="#38bdf8" strokeWidth="2" strokeDasharray="4 4" className="halo-spin" />
+                )}
+
+                {/* Outer Node Ring */}
+                <circle
+                  r={pos.isCore ? 22 : id === "HOSPITAL" ? 22 : 16}
+                  fill="#0c1624"
+                  stroke={color}
+                  strokeWidth={isSelected ? 3.5 : onRoute ? 3 : 2}
+                  opacity="0.98"
+                />
+
+                {/* Inner Status Beacon */}
+                <circle
+                  r={pos.isCore ? 7 : id === "HOSPITAL" ? 8 : 5}
+                  fill={isCurrentStop ? "#fbbf24" : color}
+                  className={cx((isCurrentStop || status === "critical") && "map-pulse")}
+                />
+
+                {/* Hospital Cross Icon */}
+                {id === "HOSPITAL" && (
+                  <g>
+                    <path d="M-6 0 H6 M0 -6 V6" stroke="#fbbf24" strokeWidth="2.5" strokeLinecap="round" />
+                  </g>
+                )}
+
+                {/* Node Title */}
+                <text
+                  textAnchor="middle"
+                  y={pos.isCore ? 38 : 30}
+                  fill={isSelected ? "#38bdf8" : "#e2e8f0"}
+                  fontSize={pos.isCore ? "11" : "9"}
+                  fontWeight="700"
+                >
+                  {id}
+                </text>
+
+                {/* Core Junction Telemetry Subtitles */}
+                {pos.isCore && (
+                  <>
+                    <text textAnchor="middle" y="50" fill="#94a3b8" fontSize="8">
+                      {junction?.vehicleCount ?? 0} veh · {junction?.signalState ?? "—"}
+                    </text>
+                    <text textAnchor="middle" y="61" fill="#64748b" fontSize="7.5">
+                      {junction?.queueLength ?? 0} q · {junction?.averageSpeed ?? 0} km/h
+                    </text>
+                  </>
+                )}
+
+                {!pos.isCore && id !== "HOSPITAL" && (
+                  <text textAnchor="middle" y="41" fill="#64748b" fontSize="7.5">
+                    {pos.name}
+                  </text>
+                )}
+              </g>
+            );
           })}
-          <g transform="translate(590,108)"><circle r="18" fill="#111827" stroke="#fbbf24" strokeWidth="2" /><path d="M-7 5v-8h14v8M-10 -3h20M-4 -9h8" stroke="#fbbf24" strokeWidth="2" fill="none" /><text textAnchor="middle" y="40" fill="#fbbf24" fontSize="10" fontWeight="700">HOSPITAL</text></g>
         </svg>
-        {route.length > 0 && <div className="route-chip"><Ambulance size={14} /> Corridor: {route.join(" → ")}</div>}
+
+        {/* Hovered Road Tooltip HUD */}
+        {hoveredRoad && (
+          <div className="road-hover-badge">
+            <Navigation size={13} />
+            <div>
+              <strong>{hoveredRoad.name}</strong>
+              <small>{hoveredRoad.lanes} lanes · {hoveredRoad.type.toUpperCase()} · Connects {hoveredRoad.from} ↔ {hoveredRoad.to}</small>
+            </div>
+          </div>
+        )}
+
+        {/* Emergency Corridor Active Chip */}
+        {route.length > 0 && (
+          <div className="route-chip">
+            <Ambulance size={14} /> Priority Corridor: {route.join(" → ")}
+          </div>
+        )}
       </div>
-      {!compact && <div className="map-legend"><span><i style={{ background: "#fb7185" }} /> Critical</span><span><i style={{ background: "#fbbf24" }} /> Watch</span><span><i style={{ background: "#22d3ee" }} /> Normal</span><span><i style={{ background: "#a3e635" }} /> Green priority</span></div>}
+
+      {/* Interactive Junction Control HUD: Connected to the Entire Website */}
+      {activeNodeInfo && (
+        <div className="junction-control-hud">
+          <div className="hud-header">
+            <div className="hud-title-wrap">
+              <div className="hud-node-badge" style={{ borderColor: activeJunction ? statusColor(activeJunction.status) : "#22d3ee" }}>
+                <Crosshair size={16} />
+                <span>{selectedNode}</span>
+              </div>
+              <div>
+                <div className="hud-eyebrow">{activeNodeInfo.zone.toUpperCase()} · INTERACTIVE JUNCTION HUD</div>
+                <h4>{activeNodeInfo.name}</h4>
+                <p>{activeNodeInfo.desc}</p>
+              </div>
+            </div>
+
+            <div className="hud-status-badge">
+              <Badge tone={activeJunction?.status === "critical" ? "red" : activeJunction?.status === "watch" ? "amber" : activeJunction?.status === "green_priority" ? "lime" : "cyan"}>
+                {activeJunction?.status?.toUpperCase()?.replace("_", " ") ?? "OPERATIONAL"}
+              </Badge>
+            </div>
+          </div>
+
+          {/* Telemetry Metrics Row */}
+          {activeJunction ? (
+            <div className="hud-metric-row">
+              <div className="hud-stat-box">
+                <span>Signal State</span>
+                <strong className={activeJunction.signalState === "RED" ? "text-red" : activeJunction.signalState === "GREEN" ? "text-lime" : "text-amber"}>
+                  {activeJunction.signalState}
+                </strong>
+                <small>{activeJunction.signalTimer}s countdown</small>
+              </div>
+              <div className="hud-stat-box">
+                <span>Vehicle Load</span>
+                <strong>{activeJunction.vehicleCount} <small>veh</small></strong>
+                <small>{activeJunction.congestion}% capacity</small>
+              </div>
+              <div className="hud-stat-box">
+                <span>Queue Spillback</span>
+                <strong>{activeJunction.queueLength} <small>cars</small></strong>
+                <small>{activeJunction.waitingTime}s wait</small>
+              </div>
+              <div className="hud-stat-box">
+                <span>Flow Velocity</span>
+                <strong>{activeJunction.averageSpeed} <small>km/h</small></strong>
+                <small>{activeJunction.incidentStatus === "clear" ? "Normal Flow" : "Incident Block"}</small>
+              </div>
+            </div>
+          ) : (
+            <div className="hud-stat-box-wide">
+              <span>Metropolitan Intermodal Hub</span>
+              <strong>{activeNodeInfo.name} feeds into central arterial grid</strong>
+            </div>
+          )}
+
+          {/* Action Buttons Connected Directly to the Entire Website */}
+          <div className="hud-actions-footer">
+            <span className="hud-actions-tag">WEBSITE INTEGRATION & DIRECT ACTIONS:</span>
+            <div className="hud-button-grid">
+              {/* 1. Jump to Live Monitor */}
+              <button
+                className="hud-btn primary"
+                onClick={() => {
+                  setPage?.("live");
+                  toast.info(`Navigated to Live Monitor for ${selectedNode}`);
+                }}
+              >
+                <Activity size={13} />
+                <span>Jump to Live Monitor</span>
+              </button>
+
+              {/* 2. Open AI Camera Feed */}
+              <button
+                className="hud-btn camera"
+                onClick={() => {
+                  onOpenJunctionCamera?.(selectedNode);
+                  toast.success(`Opened Intelligent Camera Stream for ${selectedNode}`);
+                }}
+              >
+                <Camera size={13} />
+                <span>Open Camera Feed</span>
+              </button>
+
+              {/* 3. Run AI Prediction */}
+              <button
+                className="hud-btn purple"
+                onClick={() => {
+                  setPage?.("predictions");
+                  actions?.predict?.mutate?.();
+                  toast.success(`Ran AI Traffic Prediction on ${selectedNode}`);
+                }}
+              >
+                <BrainCircuit size={13} />
+                <span>Analyze AI Prediction</span>
+              </button>
+
+              {/* 4. Quick Quantum Signal Optimize */}
+              <button
+                className="hud-btn lime"
+                onClick={() => {
+                  actions?.optimize?.mutate?.();
+                  toast.success(`Ran Quantum Signal Optimizer for ${selectedNode}`);
+                }}
+              >
+                <Zap size={13} />
+                <span>Quantum Optimize</span>
+              </button>
+
+              {/* 5. Dispatch Emergency Corridor */}
+              <button
+                className="hud-btn red"
+                onClick={() => {
+                  actions?.activate?.mutate?.();
+                  toast.success(`Dispatched Emergency Corridor via ${selectedNode}`);
+                }}
+              >
+                <Ambulance size={13} />
+                <span>Dispatch Emergency</span>
+              </button>
+
+              {/* 6. Trigger Siren Acoustic Detection */}
+              <button
+                className="hud-btn amber"
+                onClick={() => {
+                  actions?.siren?.mutate?.();
+                  toast.success(`Triggered Acoustic Siren Sensor at ${selectedNode}`);
+                }}
+              >
+                <Siren size={13} />
+                <span>Trigger Siren</span>
+              </button>
+
+              {/* 7. Simulate Rush Hour Jam */}
+              <button
+                className="hud-btn danger"
+                onClick={() => {
+                  actions?.heavy?.mutate?.();
+                  toast.error(`Simulated Rush Hour Bottleneck at ${selectedNode}`);
+                }}
+              >
+                <AlertTriangle size={13} />
+                <span>Trigger Congestion</span>
+              </button>
+
+              {/* 8. Environmental Impact */}
+              <button
+                className="hud-btn slate"
+                onClick={() => {
+                  setPage?.("pollution");
+                  toast.info("Navigated to Environmental Impact Monitor");
+                }}
+              >
+                <Leaf size={13} />
+                <span>Environmental Impact</span>
+              </button>
+
+              {/* 9. Traffic Reports */}
+              <button
+                className="hud-btn slate"
+                onClick={() => {
+                  setPage?.("reports");
+                  toast.info("Opening Traffic Intelligence Reports");
+                }}
+              >
+                <Download size={13} />
+                <span>Generate Report</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Map Legend */}
+      {!compact && (
+        <div className="map-legend">
+          <span><i style={{ background: "#fb7185" }} /> Critical Congestion</span>
+          <span><i style={{ background: "#fbbf24" }} /> Heavy Traffic Watch</span>
+          <span><i style={{ background: "#22d3ee" }} /> Free Flow Normal</span>
+          <span><i style={{ background: "#a3e635" }} /> Emergency Priority Green Laser</span>
+          <span><i style={{ background: "#a78bfa" }} /> Elevated Express Flyover</span>
+          <span className="legend-hint"><Eye size={12} /> Click any junction or road to inspect telemetry & trigger live website actions</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -161,7 +749,7 @@ function EmptyState({ icon: Icon, title, message, action }: { icon: typeof Activ
   return <div className="empty-state"><Icon size={30} /><h3>{title}</h3><p>{message}</p>{action}</div>;
 }
 
-function CommandCenter({ state, actions, demoMode, setPage }: { state: any; actions: any; demoMode: boolean; setPage: (page: PageKey) => void }) {
+function CommandCenter({ state, actions, demoMode, setPage, onOpenJunctionCamera }: { state: any; actions: any; demoMode: boolean; setPage: (page: PageKey) => void; onOpenJunctionCamera?: (id: string) => void }) {
   const [quickAction, setQuickAction] = useState("");
   useEffect(() => { if (quickAction) { const timer = window.setTimeout(() => setQuickAction(""), 2800); return () => window.clearTimeout(timer); } }, [quickAction]);
   const run = (name: string, fn: () => void) => { setQuickAction(name); fn(); };
@@ -180,7 +768,7 @@ function CommandCenter({ state, actions, demoMode, setPage }: { state: any; acti
     </div>
     <ProgressRail state={state} />
     <div className="dashboard-grid main-grid">
-      <NetworkMap state={state} />
+      <NetworkMap state={state} actions={actions} setPage={setPage} onOpenJunctionCamera={onOpenJunctionCamera} />
       <div className="panel action-panel"><div className="panel-heading"><div><span className="eyebrow">SCENARIO CONTROL</span><h3>Run the story</h3></div><Badge tone="slate">REAL API CALLS</Badge></div><p className="panel-copy">Use the sequence to show how ClearWay AI carries one traffic state through each service.</p><div className="scenario-actions">
         <ActionButton tone="danger" icon={AlertTriangle} disabled={actions.heavy.isPending} onClick={() => run("Create heavy traffic", actions.heavy.mutate)}>Create Heavy Traffic</ActionButton>
         <ActionButton tone="primary" icon={BrainCircuit} disabled={actions.predict.isPending} onClick={() => run("AI predict", actions.predict.mutate)}>AI Predict</ActionButton>
@@ -197,8 +785,8 @@ function CommandCenter({ state, actions, demoMode, setPage }: { state: any; acti
   </>;
 }
 
-function LiveMonitor({ state, setPage }: { state: any; setPage: (page: PageKey) => void }) {
-  return <><PageHeader eyebrow="OBSERVABILITY / 01" title="Live Monitor" description="A junction-by-junction operating picture with explicit simulated-data labeling." action={<Badge tone="cyan"><span className="live-dot" /> WEBSOCKET STREAM</Badge>} /><div className="dashboard-grid main-grid"><NetworkMap state={state} /><div className="panel live-readout"><div className="panel-heading"><div><span className="eyebrow">LIVE READOUT</span><h3>Network telemetry</h3></div><Badge tone="amber">AI ESTIMATION</Badge></div><div className="telemetry-big"><span>Current network load</span><strong>{state?.networkCongestion}%</strong><div className="meter"><i style={{ width: `${state?.networkCongestion ?? 0}%` }} /></div></div><div className="telemetry-list"><div><span>Vehicles in mesh</span><b>{state?.activeVehicles}</b></div><div><span>Average network wait</span><b>{state?.averageWaitTime}s</b></div><div><span>Average speed</span><b>{state?.averageSpeed} km/h</b></div><div><span>Worst junction</span><b className="text-red">{state?.worstJunction}</b></div><div><span>Simulation status</span><b className={state?.simulationRunning ? "text-lime" : "text-amber"}>{state?.simulationRunning ? "RUNNING" : "PAUSED"}</b></div><div><span>WebSocket clients</span><b>{state?.websocketClients ?? 0}</b></div></div><button className="text-button" onClick={() => setPage("pollution")}>View environmental impact <ArrowRight size={14} /></button></div></div><div className="panel"><div className="panel-heading"><div><span className="eyebrow">JUNCTION TELEMETRY · LIVE</span><h3>All network nodes</h3></div></div><div className="telemetry-grid">{state?.junctions?.map((j: any) => <div className="telemetry-card" key={j.id}><div className="telemetry-card-top"><StatusDot status={j.status} /><strong>{j.id}</strong><Badge tone={j.status === "critical" ? "red" : j.status === "watch" ? "amber" : j.status === "green_priority" ? "lime" : "cyan"}>{j.status.replace("_", " ")}</Badge></div><span>{j.name}</span><div className="telemetry-values"><div><b>{j.congestion}%</b><small>congestion</small></div><div><b>{j.vehicleCount}</b><small>vehicles</small></div><div><b>{j.queueLength}</b><small>queue</small></div><div><b>{j.averageSpeed}</b><small>km/h</small></div><div><b>{j.signalTimer}s</b><small>{j.signalState}</small></div><div><b>{j.incidentStatus === "clear" ? "CLEAR" : "INCIDENT"}</b><small>incident</small></div></div></div>)}</div></div></>;
+function LiveMonitor({ state, actions, setPage, onOpenJunctionCamera }: { state: any; actions?: any; setPage: (page: PageKey) => void; onOpenJunctionCamera?: (id: string) => void }) {
+  return <><PageHeader eyebrow="OBSERVABILITY / 01" title="Live Monitor" description="A junction-by-junction operating picture with explicit simulated-data labeling." action={<Badge tone="cyan"><span className="live-dot" /> WEBSOCKET STREAM</Badge>} /><div className="dashboard-grid main-grid"><NetworkMap state={state} actions={actions} setPage={setPage} onOpenJunctionCamera={onOpenJunctionCamera} /><div className="panel live-readout"><div className="panel-heading"><div><span className="eyebrow">LIVE READOUT</span><h3>Network telemetry</h3></div><Badge tone="amber">AI ESTIMATION</Badge></div><div className="telemetry-big"><span>Current network load</span><strong>{state?.networkCongestion}%</strong><div className="meter"><i style={{ width: `${state?.networkCongestion ?? 0}%` }} /></div></div><div className="telemetry-list"><div><span>Vehicles in mesh</span><b>{state?.activeVehicles}</b></div><div><span>Average network wait</span><b>{state?.averageWaitTime}s</b></div><div><span>Average speed</span><b>{state?.averageSpeed} km/h</b></div><div><span>Worst junction</span><b className="text-red">{state?.worstJunction}</b></div><div><span>Simulation status</span><b className={state?.simulationRunning ? "text-lime" : "text-amber"}>{state?.simulationRunning ? "RUNNING" : "PAUSED"}</b></div><div><span>WebSocket clients</span><b>{state?.websocketClients ?? 0}</b></div></div><button className="text-button" onClick={() => setPage("pollution")}>View environmental impact <ArrowRight size={14} /></button></div></div><div className="panel"><div className="panel-heading"><div><span className="eyebrow">JUNCTION TELEMETRY · LIVE</span><h3>All network nodes</h3></div></div><div className="telemetry-grid">{state?.junctions?.map((j: any) => <div className="telemetry-card" key={j.id}><div className="telemetry-card-top"><StatusDot status={j.status} /><strong>{j.id}</strong><Badge tone={j.status === "critical" ? "red" : j.status === "watch" ? "amber" : j.status === "green_priority" ? "lime" : "cyan"}>{j.status.replace("_", " ")}</Badge></div><span>{j.name}</span><div className="telemetry-values"><div><b>{j.congestion}%</b><small>congestion</small></div><div><b>{j.vehicleCount}</b><small>vehicles</small></div><div><b>{j.queueLength}</b><small>queue</small></div><div><b>{j.averageSpeed}</b><small>km/h</small></div><div><b>{j.signalTimer}s</b><small>{j.signalState}</small></div><div><b>{j.incidentStatus === "clear" ? "CLEAR" : "INCIDENT"}</b><small>incident</small></div></div></div>)}</div></div></>;
 }
 
 function Predictions({ state, actions }: { state: any; actions: any }) {
@@ -216,11 +804,11 @@ function CompareMetric({ label, before, after, suffix, positive = false }: { lab
   return <div className="compare-metric"><div><span>{label}</span><b>{before}{suffix}</b></div><div className="compare-arrow"><ArrowRight size={15} /></div><div><span>{positive ? "optimized" : "target"}</span><b className={positive ? "text-lime" : "text-red"}>{after}{suffix}</b></div></div>;
 }
 
-function EmergencyCorridor({ state, actions }: { state: any; actions: any }) {
+function EmergencyCorridor({ state, actions, setPage, onOpenJunctionCamera }: { state: any; actions: any; setPage?: (page: PageKey) => void; onOpenJunctionCamera?: (id: string) => void }) {
   const emergency = state?.emergency;
   const approved = emergency?.status === "corridor_active";
   const badge = emergency?.status === "reached" ? "DESTINATION REACHED" : approved ? "CORRIDOR ACTIVE" : "APPROVAL REQUIRED";
-  return <><PageHeader eyebrow="EMERGENCY RESPONSE / 04" title="Emergency Green Corridor" description="Human-in-the-loop corridor recommendation through the same J1 → J2 → J3 → J4 network." action={<Badge tone={approved || emergency?.status === "reached" ? "lime" : "amber"}>{badge}</Badge>} /><div className="dashboard-grid emergency-grid"><div className="panel emergency-card"><div className="emergency-ribbon"><Ambulance size={18} /> EMERGENCY VEHICLE DETECTED</div><div className="emergency-title"><div><span className="eyebrow">SIMULATED RESPONSE EVENT</span><h2>{emergency ? "City Hospital" : "Awaiting activation"}</h2></div><Hospital size={38} /></div><div className="route-list">{["J1", "J2", "J3", "J4", "Hospital"].map((stop, index) => <div key={stop} className={cx("route-stop", emergency && emergency.currentStop >= index && "passed", emergency && emergency.route[index] === stop && emergency.currentStop === index && "current")}><span>{emergency && emergency.currentStop > index ? <Check size={12} /> : index + 1}</span><b>{stop}</b>{index < 4 && <div className="route-line" />}</div>)}</div>{emergency ? <div className="emergency-status"><span>Status</span><b>{emergency.status === "awaiting_approval" ? "CORRIDOR ACTIVATION IN PROGRESS" : emergency.status === "reached" ? "DESTINATION REACHED" : "GREEN CORRIDOR APPROVED"}</b></div> : <EmptyState icon={Ambulance} title="No emergency event" message="Activate the emergency scenario from Command Center to route a simulated vehicle through the shared network." />}</div><div className="panel authority-card"><div className="panel-heading"><div><span className="eyebrow">HUMAN-IN-THE-LOOP</span><h3>Traffic Authority Review</h3></div><ShieldAlert size={18} /></div><p className="authority-copy">The system recommends signal priority. A traffic authority must approve the corridor before the simulation can proceed.</p><div className="recommendation"><span>Recommended action</span><strong>Activate temporary green corridor</strong><small>System recommendation / simulation</small></div>{emergency?.status === "awaiting_approval" ? <div className="authority-actions"><ActionButton tone="lime" icon={Check} onClick={() => actions.approve.mutate()}>Approve Corridor</ActionButton><ActionButton tone="danger" icon={X} onClick={() => actions.reject.mutate()}>Reject</ActionButton><button className="reset-button">Modify Route</button></div> : emergency?.status === "corridor_active" ? <ActionButton tone="primary" icon={Truck} onClick={() => actions.advance.mutate()}>Advance Vehicle to Next Junction</ActionButton> : emergency?.status === "reached" ? <ActionButton tone="lime" icon={RefreshCcw} onClick={() => actions.reoptimize.mutate()}>Re-optimize Network</ActionButton> : <ActionButton tone="danger" icon={Ambulance} onClick={() => actions.activate.mutate()}>Activate Emergency Scenario</ActionButton>}{emergency?.status === "corridor_active" && <div className="route-signal-list">{Object.entries(emergency?.signalRecommendation ?? {}).map(([id, value]) => <div key={id}><StatusDot status="green_priority" /><b>{id}</b><span>{value as string}</span></div>)}</div>}</div></div><NetworkMap state={state} /></>;
+  return <><PageHeader eyebrow="EMERGENCY RESPONSE / 04" title="Emergency Green Corridor" description="Human-in-the-loop corridor recommendation through the same J1 → J2 → J3 → J4 network." action={<Badge tone={approved || emergency?.status === "reached" ? "lime" : "amber"}>{badge}</Badge>} /><div className="dashboard-grid emergency-grid"><div className="panel emergency-card"><div className="emergency-ribbon"><Ambulance size={18} /> EMERGENCY VEHICLE DETECTED</div><div className="emergency-title"><div><span className="eyebrow">SIMULATED RESPONSE EVENT</span><h2>{emergency ? "City Hospital" : "Awaiting activation"}</h2></div><Hospital size={38} /></div><div className="route-list">{["J1", "J2", "J3", "J4", "Hospital"].map((stop, index) => <div key={stop} className={cx("route-stop", emergency && emergency.currentStop >= index && "passed", emergency && emergency.route[index] === stop && emergency.currentStop === index && "current")}><span>{emergency && emergency.currentStop > index ? <Check size={12} /> : index + 1}</span><b>{stop}</b>{index < 4 && <div className="route-line" />}</div>)}</div>{emergency ? <div className="emergency-status"><span>Status</span><b>{emergency.status === "awaiting_approval" ? "CORRIDOR ACTIVATION IN PROGRESS" : emergency.status === "reached" ? "DESTINATION REACHED" : "GREEN CORRIDOR APPROVED"}</b></div> : <EmptyState icon={Ambulance} title="No emergency event" message="Activate the emergency scenario from Command Center to route a simulated vehicle through the shared network." />}</div><div className="panel authority-card"><div className="panel-heading"><div><span className="eyebrow">HUMAN-IN-THE-LOOP</span><h3>Traffic Authority Review</h3></div><ShieldAlert size={18} /></div><p className="authority-copy">The system recommends signal priority. A traffic authority must approve the corridor before the simulation can proceed.</p><div className="recommendation"><span>Recommended action</span><strong>Activate temporary green corridor</strong><small>System recommendation / simulation</small></div>{emergency?.status === "awaiting_approval" ? <div className="authority-actions"><ActionButton tone="lime" icon={Check} onClick={() => actions.approve.mutate()}>Approve Corridor</ActionButton><ActionButton tone="danger" icon={X} onClick={() => actions.reject.mutate()}>Reject</ActionButton><button className="reset-button">Modify Route</button></div> : emergency?.status === "corridor_active" ? <ActionButton tone="primary" icon={Truck} onClick={() => actions.advance.mutate()}>Advance Vehicle to Next Junction</ActionButton> : emergency?.status === "reached" ? <ActionButton tone="lime" icon={RefreshCcw} onClick={() => actions.reoptimize.mutate()}>Re-optimize Network</ActionButton> : <ActionButton tone="danger" icon={Ambulance} onClick={() => actions.activate.mutate()}>Activate Emergency Scenario</ActionButton>}{emergency?.status === "corridor_active" && <div className="route-signal-list">{Object.entries(emergency?.signalRecommendation ?? {}).map(([id, value]) => <div key={id}><StatusDot status="green_priority" /><b>{id}</b><span>{value as string}</span></div>)}</div>}</div></div><NetworkMap state={state} actions={actions} setPage={setPage} onOpenJunctionCamera={onOpenJunctionCamera} /></>;
 }
 
 function SirenDetection({ state, actions }: { state: any; actions: any }) {
@@ -477,22 +1065,25 @@ export default function Home() {
     setPage,
   }), [heavy, predict, optimize, activate, approve, reject, siren, simulate, advance, reoptimize, reset, acknowledge, assistant, start, pause, autoEvents, accident, standaloneMode, wsConnected]);
 
+  const [cameraModalOpen, setCameraModalOpen] = useState(false);
+  const [selectedCameraJunction, setSelectedCameraJunction] = useState("J3");
+
   const state = liveState ?? (!standaloneMode && stateQuery.data ? stateQuery.data : localState) ?? localState;
   const activeItem = navItems.find((item) => item.id === page) ?? navItems[0];
   const navigate = (next: PageKey) => { setPage(next); setMobileNav(false); };
   const content = (() => {
     switch (page) {
-      case "live": return <LiveMonitor state={state} setPage={navigate} />;
+      case "live": return <LiveMonitor state={state} actions={actions} setPage={navigate} onOpenJunctionCamera={(id) => { setSelectedCameraJunction(id); setCameraModalOpen(true); }} />;
       case "predictions": return <Predictions state={state} actions={actions} />;
       case "optimizer": return <Optimizer state={state} actions={actions} />;
-      case "emergency": return <EmergencyCorridor state={state} actions={actions} />;
+      case "emergency": return <EmergencyCorridor state={state} actions={actions} setPage={navigate} onOpenJunctionCamera={(id) => { setSelectedCameraJunction(id); setCameraModalOpen(true); }} />;
       case "siren": return <SirenDetection state={state} actions={actions} />;
       case "simulation": return <SimulationLab state={state} actions={actions} />;
       case "pollution": return <PollutionMonitor state={state} />;
       case "alerts": return <AlertsCenter state={state} actions={actions} />;
       case "assistant": return <Assistant state={state} actions={actions} />;
       case "reports": return <Reports state={state} />;
-      default: return <CommandCenter state={state} actions={actions} demoMode={demoMode} setPage={navigate} />;
+      default: return <CommandCenter state={state} actions={actions} demoMode={demoMode} setPage={navigate} onOpenJunctionCamera={(id) => { setSelectedCameraJunction(id); setCameraModalOpen(true); }} />;
     }
   })();
 
@@ -503,6 +1094,45 @@ export default function Home() {
       <nav>{navItems.map(({ id, label, icon: Icon }) => <button className={cx("nav-item", page === id && "active")} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span>{id === "alerts" && (state?.alerts?.filter((a: any) => a.status === "new").length ?? 0) > 0 && <i className="nav-count">{state?.alerts?.filter((a: any) => a.status === "new").length}</i>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="demo-control"><div><span className="eyebrow">PRESENTER MODE</span><strong>Judge Demo Mode</strong></div><button className={cx("toggle", demoMode && "on")} onClick={() => setDemoMode((value) => !value)}><i /></button></div><div className="backend-status"><span className="live-dot" /><div><strong>BACKEND: {wsConnected ? "Connected" : "Autonomous Engine"}</strong><small>{wsConnected ? "WS: Live" : "In-Memory Simulation"} · {state?.lastUpdated ? new Date(state.lastUpdated).toLocaleTimeString() : "syncing"}</small></div></div><div className="sidebar-disclaimer">SIMULATED DATA<br />HYBRID OPTIMIZATION<br />NO REAL INFRASTRUCTURE CONTROL</div></div>
     </aside>
-    <main className="main-content"><header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>CONTROL ROOM</span><ChevronRight size={13} /><b>{activeItem.label.toUpperCase()}</b></div><div className="topbar-right"><Badge tone="slate">DEMO MODE</Badge><Badge tone={wsConnected ? "lime" : "cyan"}>{wsConnected ? "WS: LIVE" : "WS: SIMULATED"}</Badge><Badge tone={state?.simulationRunning ? "cyan" : "amber"}>SIM: {state?.simulationRunning ? "RUNNING" : "PAUSED"}</Badge><span className="topbar-date">{new Date().toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</span><IconButton label="Refresh state" onClick={sync}><RefreshCcw size={16} /></IconButton></div></header><div className="page-content">{content}</div></main>
+    <main className="main-content">
+      <header className="topbar">
+        <button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
+        <div className="crumbs"><span>CONTROL ROOM</span><ChevronRight size={13} /><b>{activeItem.label.toUpperCase()}</b></div>
+        <div className="topbar-right">
+          <button
+            className="camera-header-btn"
+            onClick={() => setCameraModalOpen(true)}
+            title="Open AI Visual Traffic Monitor (Webcam & Video Upload)"
+          >
+            <Camera size={15} />
+            <span>Open Camera</span>
+            <span className="camera-pulse-dot" />
+          </button>
+          <Badge tone="slate">DEMO MODE</Badge>
+          <Badge tone={wsConnected ? "lime" : "cyan"}>{wsConnected ? "WS: LIVE" : "WS: SIMULATED"}</Badge>
+          <Badge tone={state?.simulationRunning ? "cyan" : "amber"}>SIM: {state?.simulationRunning ? "RUNNING" : "PAUSED"}</Badge>
+          <span className="topbar-date">{new Date().toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</span>
+          <IconButton label="Refresh state" onClick={sync}><RefreshCcw size={16} /></IconButton>
+        </div>
+      </header>
+      <div className="page-content">{content}</div>
+    </main>
+
+    {/* Intelligent Camera Vision Modal (Live Stream & Video Upload) */}
+    <CameraVisionModal
+      isOpen={cameraModalOpen}
+      onClose={() => setCameraModalOpen(false)}
+      initialJunction={selectedCameraJunction}
+      onApplyDataToJunction={(data) => {
+        simulation.updateJunctionTelemetry(data.junctionId, {
+          vehicleCount: data.vehicleCount,
+          congestion: data.congestion,
+          hasEmergency: data.hasEmergency,
+        });
+        sync();
+      }}
+      onDispatchEmergency={() => actions.activate.mutate()}
+      onOptimizeSignals={() => actions.optimize.mutate()}
+    />
   </div>;
 }

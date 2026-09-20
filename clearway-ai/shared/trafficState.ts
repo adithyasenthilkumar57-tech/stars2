@@ -621,3 +621,54 @@ export function getLatestReport() {
 export function listAlerts() {
   return clone(state.alerts);
 }
+
+export function updateJunctionTelemetry(
+  junctionId: string,
+  data: {
+    vehicleCount?: number;
+    congestion?: number;
+    queueLength?: number;
+    averageSpeed?: number;
+    hasEmergency?: boolean;
+  }
+) {
+  state.junctions = state.junctions.map((j) => {
+    if (j.id !== junctionId) return j;
+    const congestion = data.congestion !== undefined ? clamp(data.congestion, 5, 99) : j.congestion;
+    const vehicleCount = data.vehicleCount !== undefined ? Math.max(1, data.vehicleCount) : j.vehicleCount;
+    const queueLength = data.queueLength !== undefined ? Math.max(0, data.queueLength) : Math.round(vehicleCount * 0.45);
+    const averageSpeed = data.averageSpeed !== undefined ? clamp(data.averageSpeed, 10, 80) : Math.max(12, Math.round(55 - congestion * 0.4));
+    let status: JunctionStatus = j.status;
+    if (congestion >= 75) status = "critical";
+    else if (congestion >= 45) status = "watch";
+    else status = "normal";
+
+    return {
+      ...j,
+      vehicleCount,
+      congestion,
+      queueLength,
+      averageSpeed,
+      status,
+    };
+  });
+
+  const totalVehicles = state.junctions.reduce((acc, j) => acc + j.vehicleCount, 0);
+  const avgCongestion = Math.round(state.junctions.reduce((acc, j) => acc + j.congestion, 0) / state.junctions.length);
+  const avgSpeed = Math.round(state.junctions.reduce((acc, j) => acc + j.averageSpeed, 0) / state.junctions.length);
+  const worst = [...state.junctions].sort((a, b) => b.congestion - a.congestion)[0]?.id ?? state.worstJunction;
+
+  state.activeVehicles = totalVehicles;
+  state.networkCongestion = avgCongestion;
+  state.averageSpeed = avgSpeed;
+  state.worstJunction = worst;
+
+  if (data.hasEmergency && !state.emergencyActive) {
+    activateEmergency();
+    touch(`Visual AI sighted Emergency Vehicle at ${junctionId}. Corridor recommended.`);
+  } else {
+    touch(`Visual AI feed injected live telemetry for ${junctionId}: ${data.vehicleCount ?? 0} veh (${avgCongestion}% load).`);
+  }
+
+  return getTrafficState();
+}
