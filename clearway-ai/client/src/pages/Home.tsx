@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { trpc } from "@/lib/trpc";
+import * as simulation from "@shared/trafficState";
 import {
   Activity,
   AlertTriangle,
@@ -264,8 +265,8 @@ function Assistant({ state, actions }: { state: any; actions: any }) {
 }
 
 function Reports({ state }: { state: any }) {
-  const reportQuery = trpc.reports.latest.useQuery(undefined, { staleTime: 2000 });
-  const report = reportQuery.data;
+  const reportQuery = trpc.reports.latest.useQuery(undefined, { staleTime: 2000, retry: false });
+  const report = reportQuery.data ?? simulation.getLatestReport();
   const download = () => { if (!report) return; const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = "clearway-ai-demo-report.json"; link.click(); URL.revokeObjectURL(url); };
   return <><PageHeader eyebrow="EVIDENCE PACK / 10" title="Reports" description="Generate a judge-ready snapshot of the shared state, decisions, emergency event, simulation, and estimated environmental impact." action={<ActionButton tone="primary" icon={Download} onClick={download}>Download JSON</ActionButton>} /><div className="report-preview"><div className="report-cover"><div><span className="report-kicker">CLEARWAY AI</span><h2>Judge Demo Traffic Report</h2><p>Quantum-enhanced adaptive urban traffic optimization</p></div><div className="report-stamp">SIMULATED<br />DEMO DATA</div></div><div className="report-meta"><span>Generated {report?.generatedAt ? new Date(report.generatedAt).toLocaleString() : "—"}</span><Badge tone="slate">{report?.disclaimer ?? "SIMULATED"}</Badge></div><div className="report-sections"><div><span className="eyebrow">CURRENT STATE</span><h3>{report?.summary ?? state?.lastEvent}</h3><p>{state?.networkCongestion}% congestion · {state?.averageWaitTime}s average wait · {state?.queueLength}-vehicle critical queue</p></div><div><span className="eyebrow">HIGHLIGHTS</span>{report?.highlights?.map((highlight: string) => <p className="report-highlight" key={highlight}><Check size={14} /> {highlight}</p>)}</div><div><span className="eyebrow">LIMITATIONS</span><p>All traffic, acoustic, environmental, emergency, and quantum values are simulated or AI-estimated. This prototype does not control real-world infrastructure.</p></div></div></div></>;
 }
@@ -276,55 +277,207 @@ export default function Home() {
   const [demoMode, setDemoMode] = useState(true);
   const [liveState, setLiveState] = useState<any>(null);
   const [wsConnected, setWsConnected] = useState(false);
-  const stateQuery = trpc.network.state.useQuery(undefined, { refetchInterval: 4000, retry: 2 });
+  const [localState, setLocalState] = useState<any>(() => simulation.getTrafficState());
+  const [standaloneMode, setStandaloneMode] = useState(false);
+
+  const stateQuery = trpc.network.state.useQuery(undefined, { 
+    refetchInterval: 4000, 
+    retry: 1, 
+    refetchOnWindowFocus: false 
+  });
   const utils = trpc.useUtils();
-  const sync = () => utils.network.state.invalidate();
+  const sync = () => {
+    if (!standaloneMode) {
+      utils.network.state.invalidate();
+    }
+    setLocalState(simulation.getTrafficState());
+  };
+
+  // Run in-browser simulation engine (ticks every 1.5s)
   useEffect(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws/traffic`);
-    socket.onopen = () => setWsConnected(true);
-    socket.onmessage = (event) => {
-      try { setLiveState(JSON.parse(event.data)); } catch { /* Ignore malformed demo packets. */ }
-    };
-    socket.onerror = () => setWsConnected(false);
-    socket.onclose = () => setWsConnected(false);
-    return () => socket.close();
+    simulation.startSimulationEngine();
+    const unsub = simulation.subscribeTraffic((snap) => {
+      setLocalState(snap);
+    });
+    return () => unsub();
   }, []);
-  const heavy = trpc.scenario.heavyTraffic.useMutation({ onSuccess: () => { sync(); toast.success("Heavy traffic created at J3"); } });
-  const predict = trpc.prediction.analyze.useMutation({ onSuccess: () => { sync(); toast.success("AI prediction completed"); } });
-  const optimize = trpc.optimization.optimize.useMutation({ onSuccess: () => { sync(); toast.success("Hybrid optimization completed"); } });
-  const activate = trpc.emergency.activate.useMutation({ onSuccess: () => { sync(); toast.success("Emergency scenario activated"); } });
-  const approve = trpc.emergency.approve.useMutation({ onSuccess: () => { sync(); toast.success("Green corridor approved"); } });
-  const reject = trpc.emergency.reject.useMutation({ onSuccess: () => { sync(); toast.info("Corridor recommendation rejected"); } });
-  const siren = trpc.siren.detect.useMutation({ onSuccess: () => { sync(); toast.success("Siren detected — alert generated"); } });
-  const simulate = trpc.simulation.run.useMutation({ onSuccess: () => { sync(); toast.success("Simulation comparison complete"); } });
-  const advance = trpc.emergency.advance.useMutation({ onSuccess: () => { sync(); } });
-  const reoptimize = trpc.optimization.reoptimize.useMutation({ onSuccess: () => { sync(); toast.success("Emergency cleared and network re-optimized"); } });
-  const reset = trpc.network.reset.useMutation({ onSuccess: () => { sync(); setPage("command"); toast.success("Demo reset to normal traffic"); } });
-  const acknowledge = trpc.alerts.acknowledge.useMutation({ onSuccess: () => { sync(); } });
-  const assistant = trpc.assistant.query.useMutation({ onSuccess: () => { sync(); } });
-  const start = trpc.network.start.useMutation({ onSuccess: () => sync() });
-  const pause = trpc.network.pause.useMutation({ onSuccess: () => sync() });
-  const autoEvents = trpc.network.autoEvents.useMutation({ onSuccess: () => sync() });
-  const accident = trpc.network.triggerAccident.useMutation({ onSuccess: () => { sync(); toast.info("Simulated accident created at J4"); } });
+
+  // Detect standalone mode when backend query fails
+  useEffect(() => {
+    if (stateQuery.isError) {
+      setStandaloneMode(true);
+    } else if (stateQuery.data) {
+      setStandaloneMode(false);
+    }
+  }, [stateQuery.isError, stateQuery.data]);
+
+  // WebSocket connection for real-time live server
+  useEffect(() => {
+    try {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${window.location.host}/ws/traffic`);
+      socket.onopen = () => {
+        setWsConnected(true);
+        setStandaloneMode(false);
+      };
+      socket.onmessage = (event) => {
+        try { setLiveState(JSON.parse(event.data)); } catch { /* Ignore malformed demo packets. */ }
+      };
+      socket.onerror = () => setWsConnected(false);
+      socket.onclose = () => setWsConnected(false);
+      return () => socket.close();
+    } catch {
+      setWsConnected(false);
+    }
+  }, []);
+
+  const runAction = (mutateFn: () => void, localFallback: () => void) => {
+    if (!standaloneMode && wsConnected) {
+      mutateFn();
+    } else {
+      localFallback();
+      sync();
+    }
+  };
+
+  const heavy = trpc.scenario.heavyTraffic.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Heavy traffic created at J3"); },
+    onError: () => { simulation.createHeavyTraffic(); sync(); toast.success("Heavy traffic created at J3"); }
+  });
+  const predict = trpc.prediction.analyze.useMutation({ 
+    onSuccess: () => { sync(); toast.success("AI prediction completed"); },
+    onError: () => { simulation.analyzePrediction(); sync(); toast.success("AI prediction completed"); }
+  });
+  const optimize = trpc.optimization.optimize.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Hybrid optimization completed"); },
+    onError: () => { simulation.optimizeNetwork(false); sync(); toast.success("Hybrid optimization completed"); }
+  });
+  const activate = trpc.emergency.activate.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Emergency scenario activated"); },
+    onError: () => { simulation.activateEmergency(); sync(); toast.success("Emergency scenario activated"); }
+  });
+  const approve = trpc.emergency.approve.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Green corridor approved"); },
+    onError: () => { simulation.approveEmergency(); sync(); toast.success("Green corridor approved"); }
+  });
+  const reject = trpc.emergency.reject.useMutation({ 
+    onSuccess: () => { sync(); toast.info("Corridor recommendation rejected"); },
+    onError: () => { simulation.rejectEmergency(); sync(); toast.info("Corridor recommendation rejected"); }
+  });
+  const siren = trpc.siren.detect.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Siren detected — alert generated"); },
+    onError: () => { simulation.detectSiren(); sync(); toast.success("Siren detected — alert generated"); }
+  });
+  const simulate = trpc.simulation.run.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Simulation comparison complete"); },
+    onError: () => { simulation.runSimulation(); sync(); toast.success("Simulation comparison complete"); }
+  });
+  const advance = trpc.emergency.advance.useMutation({ 
+    onSuccess: () => { sync(); },
+    onError: () => { simulation.advanceEmergency(); sync(); }
+  });
+  const reoptimize = trpc.optimization.reoptimize.useMutation({ 
+    onSuccess: () => { sync(); toast.success("Emergency cleared and network re-optimized"); },
+    onError: () => { simulation.reoptimizeNetwork(); sync(); toast.success("Emergency cleared and network re-optimized"); }
+  });
+  const reset = trpc.network.reset.useMutation({ 
+    onSuccess: () => { sync(); setPage("command"); toast.success("Demo reset to normal traffic"); },
+    onError: () => { simulation.resetDemo(); sync(); setPage("command"); toast.success("Demo reset to normal traffic"); }
+  });
+  const acknowledge = trpc.alerts.acknowledge.useMutation({ 
+    onSuccess: () => { sync(); },
+    onError: (_err, vars) => { simulation.acknowledgeAlert(vars.id, vars.status as any); sync(); }
+  });
+  const assistant = trpc.assistant.query.useMutation({ 
+    onSuccess: () => { sync(); } 
+  });
+  const start = trpc.network.start.useMutation({ 
+    onSuccess: () => sync(),
+    onError: () => { simulation.setSimulationRunning(true); sync(); }
+  });
+  const pause = trpc.network.pause.useMutation({ 
+    onSuccess: () => sync(),
+    onError: () => { simulation.setSimulationRunning(false); sync(); }
+  });
+  const autoEvents = trpc.network.autoEvents.useMutation({ 
+    onSuccess: () => sync(),
+    onError: (_err, vars) => { simulation.setAutoEvents(vars.enabled); sync(); }
+  });
+  const accident = trpc.network.triggerAccident.useMutation({ 
+    onSuccess: () => { sync(); toast.info("Simulated accident created at J4"); },
+    onError: () => { simulation.triggerAccident(); sync(); toast.info("Simulated accident created at J4"); }
+  });
+
   const runFullDemo = () => {
-    reset.mutate();
-    window.setTimeout(() => heavy.mutate(), 1800);
-    window.setTimeout(() => predict.mutate(), 5200);
-    window.setTimeout(() => optimize.mutate(), 8200);
-    window.setTimeout(() => activate.mutate(), 11800);
-    window.setTimeout(() => approve.mutate(), 14600);
-    window.setTimeout(() => siren.mutate(), 18500);
-    window.setTimeout(() => simulate.mutate(), 22000);
-    window.setTimeout(() => advance.mutate(), 26000);
-    window.setTimeout(() => advance.mutate(), 31000);
-    window.setTimeout(() => advance.mutate(), 36000);
-    window.setTimeout(() => advance.mutate(), 41000);
-    window.setTimeout(() => reoptimize.mutate(), 45500);
+    const doReset = () => runAction(reset.mutate, () => simulation.resetDemo());
+    const doHeavy = () => runAction(heavy.mutate, () => simulation.createHeavyTraffic());
+    const doPredict = () => runAction(predict.mutate, () => simulation.analyzePrediction());
+    const doOptimize = () => runAction(optimize.mutate, () => simulation.optimizeNetwork(false));
+    const doActivate = () => runAction(activate.mutate, () => simulation.activateEmergency());
+    const doApprove = () => runAction(approve.mutate, () => simulation.approveEmergency());
+    const doSiren = () => runAction(siren.mutate, () => simulation.detectSiren());
+    const doSimulate = () => runAction(simulate.mutate, () => simulation.runSimulation());
+    const doAdvance = () => runAction(advance.mutate, () => simulation.advanceEmergency());
+    const doReoptimize = () => runAction(reoptimize.mutate, () => simulation.reoptimizeNetwork());
+
+    doReset();
+    window.setTimeout(doHeavy, 1800);
+    window.setTimeout(doPredict, 5200);
+    window.setTimeout(doOptimize, 8200);
+    window.setTimeout(doActivate, 11800);
+    window.setTimeout(doApprove, 14600);
+    window.setTimeout(doSiren, 18500);
+    window.setTimeout(doSimulate, 22000);
+    window.setTimeout(doAdvance, 26000);
+    window.setTimeout(doAdvance, 31000);
+    window.setTimeout(doAdvance, 36000);
+    window.setTimeout(doAdvance, 41000);
+    window.setTimeout(doReoptimize, 45500);
     toast.success("Full demo timeline started — watch the live network evolve");
   };
-  const actions = useMemo(() => ({ heavy, predict, optimize, activate, approve, reject, siren, simulate, advance, reoptimize, reset, acknowledge, assistant, start, pause, autoEvents, accident, fullDemo: runFullDemo, refresh: sync, setPage }), [heavy, predict, optimize, activate, approve, reject, siren, simulate, advance, reoptimize, reset, acknowledge, assistant, start, pause, autoEvents, accident]);
-  const state = liveState ?? stateQuery.data;
+
+  const actions = useMemo(() => ({
+    heavy: { mutate: () => runAction(heavy.mutate, () => { simulation.createHeavyTraffic(); toast.success("Heavy traffic created at J3"); }), isPending: heavy.isPending },
+    predict: { mutate: () => runAction(predict.mutate, () => { simulation.analyzePrediction(); toast.success("AI prediction completed"); }), isPending: predict.isPending },
+    optimize: { mutate: () => runAction(optimize.mutate, () => { simulation.optimizeNetwork(false); toast.success("Hybrid optimization completed"); }), isPending: optimize.isPending },
+    activate: { mutate: () => runAction(activate.mutate, () => { simulation.activateEmergency(); toast.success("Emergency scenario activated"); }), isPending: activate.isPending },
+    approve: { mutate: () => runAction(approve.mutate, () => { simulation.approveEmergency(); toast.success("Green corridor approved"); }), isPending: approve.isPending },
+    reject: { mutate: () => runAction(reject.mutate, () => { simulation.rejectEmergency(); toast.info("Corridor recommendation rejected"); }), isPending: reject.isPending },
+    siren: { mutate: () => runAction(siren.mutate, () => { simulation.detectSiren(); toast.success("Siren detected — alert generated"); }), isPending: siren.isPending },
+    simulate: { mutate: () => runAction(simulate.mutate, () => { simulation.runSimulation(); toast.success("Simulation comparison complete"); }), isPending: simulate.isPending },
+    advance: { mutate: () => runAction(advance.mutate, () => simulation.advanceEmergency()), isPending: advance.isPending },
+    reoptimize: { mutate: () => runAction(reoptimize.mutate, () => { simulation.reoptimizeNetwork(); toast.success("Emergency cleared and network re-optimized"); }), isPending: reoptimize.isPending },
+    reset: { mutate: () => runAction(reset.mutate, () => { simulation.resetDemo(); setPage("command"); toast.success("Demo reset to normal traffic"); }), isPending: reset.isPending },
+    acknowledge: { mutate: (vars: any) => runAction(() => acknowledge.mutate(vars), () => simulation.acknowledgeAlert(vars.id, vars.status)), isPending: acknowledge.isPending },
+    assistant: {
+      mutate: (vars: any, opts?: any) => {
+        if (!standaloneMode && wsConnected) {
+          assistant.mutate(vars, {
+            onSuccess: opts?.onSuccess,
+            onError: () => {
+              const res = simulation.answerAssistant(vars.question);
+              opts?.onSuccess?.(res);
+              sync();
+            }
+          });
+        } else {
+          const res = simulation.answerAssistant(vars.question);
+          opts?.onSuccess?.(res);
+          sync();
+        }
+      },
+      isPending: assistant.isPending,
+    },
+    start: { mutate: () => runAction(start.mutate, () => simulation.setSimulationRunning(true)), isPending: start.isPending },
+    pause: { mutate: () => runAction(pause.mutate, () => simulation.setSimulationRunning(false)), isPending: pause.isPending },
+    autoEvents: { mutate: (vars: any) => runAction(() => autoEvents.mutate(vars), () => simulation.setAutoEvents(vars.enabled)), isPending: autoEvents.isPending },
+    accident: { mutate: () => runAction(accident.mutate, () => { simulation.triggerAccident(); toast.info("Simulated accident created at J4"); }), isPending: accident.isPending },
+    fullDemo: runFullDemo,
+    refresh: sync,
+    setPage,
+  }), [heavy, predict, optimize, activate, approve, reject, siren, simulate, advance, reoptimize, reset, acknowledge, assistant, start, pause, autoEvents, accident, standaloneMode, wsConnected]);
+
+  const state = liveState ?? (!standaloneMode && stateQuery.data ? stateQuery.data : localState) ?? localState;
   const activeItem = navItems.find((item) => item.id === page) ?? navItems[0];
   const navigate = (next: PageKey) => { setPage(next); setMobileNav(false); };
   const content = (() => {
@@ -342,13 +495,14 @@ export default function Home() {
       default: return <CommandCenter state={state} actions={actions} demoMode={demoMode} setPage={navigate} />;
     }
   })();
+
   return <div className="app-shell">
     <aside className={cx("sidebar", mobileNav && "sidebar-open")}>
       <div className="brand"><div className="brand-mark"><Network size={20} /></div><div><strong>CLEARWAY<span> AI</span></strong><small>Urban traffic intelligence</small></div><button className="mobile-close" onClick={() => setMobileNav(false)}><X size={18} /></button></div>
       <div className="sidebar-label">CONTROL SURFACES</div>
       <nav>{navItems.map(({ id, label, icon: Icon }) => <button className={cx("nav-item", page === id && "active")} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span>{id === "alerts" && (state?.alerts?.filter((a: any) => a.status === "new").length ?? 0) > 0 && <i className="nav-count">{state?.alerts?.filter((a: any) => a.status === "new").length}</i>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="demo-control"><div><span className="eyebrow">PRESENTER MODE</span><strong>Judge Demo Mode</strong></div><button className={cx("toggle", demoMode && "on")} onClick={() => setDemoMode((value) => !value)}><i /></button></div><div className="backend-status"><span className="live-dot" /><div><strong>BACKEND: Connected</strong><small>WS: {wsConnected ? "Live" : "Reconnecting"} · {state?.lastUpdated ? new Date(state.lastUpdated).toLocaleTimeString() : "syncing"}</small></div></div><div className="sidebar-disclaimer">SIMULATED DATA<br />HYBRID OPTIMIZATION<br />NO REAL INFRASTRUCTURE CONTROL</div></div>
+      <div className="sidebar-bottom"><div className="demo-control"><div><span className="eyebrow">PRESENTER MODE</span><strong>Judge Demo Mode</strong></div><button className={cx("toggle", demoMode && "on")} onClick={() => setDemoMode((value) => !value)}><i /></button></div><div className="backend-status"><span className="live-dot" /><div><strong>BACKEND: {wsConnected ? "Connected" : "Autonomous Engine"}</strong><small>{wsConnected ? "WS: Live" : "In-Memory Simulation"} · {state?.lastUpdated ? new Date(state.lastUpdated).toLocaleTimeString() : "syncing"}</small></div></div><div className="sidebar-disclaimer">SIMULATED DATA<br />HYBRID OPTIMIZATION<br />NO REAL INFRASTRUCTURE CONTROL</div></div>
     </aside>
-    <main className="main-content"><header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>CONTROL ROOM</span><ChevronRight size={13} /><b>{activeItem.label.toUpperCase()}</b></div><div className="topbar-right"><Badge tone="slate">DEMO MODE</Badge><Badge tone={wsConnected ? "lime" : "amber"}>WS: {wsConnected ? "LIVE" : "RECONNECTING"}</Badge><Badge tone={state?.simulationRunning ? "cyan" : "amber"}>SIM: {state?.simulationRunning ? "RUNNING" : "PAUSED"}</Badge><span className="topbar-date">{new Date().toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</span><IconButton label="Refresh state" onClick={sync}><RefreshCcw size={16} /></IconButton></div></header><div className="page-content">{stateQuery.isError ? <div className="backend-error"><AlertTriangle size={18} /><div><strong>BACKEND: Disconnected</strong><span>ClearWay AI cannot verify the shared state. Retry to continue.</span></div><button onClick={() => stateQuery.refetch()}>Retry</button></div> : stateQuery.isLoading ? <div className="loading-shell"><RefreshCcw className="spin" size={22} /><span>Connecting to ClearWay AI backend…</span></div> : content}</div></main>
+    <main className="main-content"><header className="topbar"><button className="mobile-menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="crumbs"><span>CONTROL ROOM</span><ChevronRight size={13} /><b>{activeItem.label.toUpperCase()}</b></div><div className="topbar-right"><Badge tone="slate">DEMO MODE</Badge><Badge tone={wsConnected ? "lime" : "cyan"}>{wsConnected ? "WS: LIVE" : "WS: SIMULATED"}</Badge><Badge tone={state?.simulationRunning ? "cyan" : "amber"}>SIM: {state?.simulationRunning ? "RUNNING" : "PAUSED"}</Badge><span className="topbar-date">{new Date().toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}</span><IconButton label="Refresh state" onClick={sync}><RefreshCcw size={16} /></IconButton></div></header><div className="page-content">{content}</div></main>
   </div>;
 }
